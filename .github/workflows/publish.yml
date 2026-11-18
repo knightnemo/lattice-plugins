@@ -1,0 +1,79 @@
+name: Publish index
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One publish at a time, so serials are handed out in order and never reused.
+concurrency:
+  group: publish-index
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node scripts/validate.mjs
+      - run: node scripts/build-index.mjs --out site
+      - uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-site
+          path: site
+          if-no-files-found: error
+          retention-days: 7
+
+  # The only job that can read the signing key. The registry-signing environment requires
+  # leo1oel's approval and only accepts deployments from main.
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: registry-signing
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: keys
+      - uses: actions/download-artifact@v8
+        with:
+          name: unsigned-site
+          path: site
+      - run: sudo apt-get update -q && sudo apt-get install -y -q minisign
+      - name: Sign index.json and blocked.json
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_PRIMARY_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/primary.key"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          serial=$(jq -r .serial site/index.json)
+          for file in index.json blocked.json; do
+            minisign -S -s "$key" -m "site/$file" -x "site/$file.minisig" -t "lattice-plugins file:$file serial:$serial"
+            minisign -V -p keys/primary.pub -m "site/$file" -x "site/$file.minisig"
+          done
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
