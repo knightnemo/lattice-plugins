@@ -1,0 +1,11 @@
+{
+  "id": "app.lattice.zotero-search",
+  "version": "0.1.0",
+  "repository": "https://github.com/leo1oel/lattice",
+  "tag": "plugins/zotero-search-v0.1.0",
+  "commit": "16d1569d1a5feae6838a9caceef6a2f4bf68dee0",
+  "path": "examples/plugins/zotero-search",
+  "sha256": "d8bcb41b2c8cdc5cb610f00409cf9ac90c740afd5c6492cf4b913e4475776c72",
+  "author": "Lattice",
+  "categories": ["citations"]
+}
