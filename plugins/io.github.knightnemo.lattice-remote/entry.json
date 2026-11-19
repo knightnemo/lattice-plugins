@@ -1,7 +1,7 @@
 {
   "id": "io.github.knightnemo.lattice-remote",
   "version": "0.4.6",
-  "repository": "https://github.com/knightnemo/lattice-web-ui",
+  "repository": "https://github.com/lattice-writer/lattice-web-ui",
   "tag": "v0.4.6",
   "commit": "3b0b52342b9069cd90980fbf8376b07ecc7e1d41",
   "path": "plugin",
