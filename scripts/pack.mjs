@@ -5,8 +5,10 @@
 // identical: any change here changes every published hash.
 //
 // The zip is reproducible: entries sorted by path, a fixed 1980-01-01 timestamp, Unix
-// permissions 0644 (0755 when executable), level-9 deflate, no extra fields.
-import { constants, crc32, deflateRawSync } from "node:zlib";
+// permissions 0644 (0755 when executable), no extra fields, and entries stored
+// uncompressed: deflate's bytes depend on the zlib build (Node 24 and 26 differ), so a
+// compressed pack would hash differently on the author's machine and in CI.
+import { crc32 } from "node:zlib";
 
 /** Whether `path` (relative, `/`-separated) goes into the pack. */
 export function packed(path) {
@@ -25,13 +27,13 @@ export function packFiles(files) {
   const sorted = sortFiles(files);
   for (const file of sorted) {
     const name = Buffer.from(file.path, "utf8");
-    const data = deflateRawSync(file.data, { level: constants.Z_BEST_COMPRESSION });
+    const data = file.data;
     const crc = crc32(file.data);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
-    local.writeUInt16LE(20, 4); // version needed: deflate
+    local.writeUInt16LE(10, 4); // version needed: stored
     local.writeUInt16LE(0x0800, 6); // UTF-8 names
-    local.writeUInt16LE(8, 8); // deflate
+    local.writeUInt16LE(0, 8); // stored
     local.writeUInt16LE(0, 10); // 00:00:00
     local.writeUInt16LE(DOS_DATE, 12);
     local.writeUInt32LE(crc, 14);
@@ -41,9 +43,9 @@ export function packFiles(files) {
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE((3 << 8) | 20, 4); // made by Unix, zip 2.0
-    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(10, 6);
     central.writeUInt16LE(0x0800, 8);
-    central.writeUInt16LE(8, 10);
+    central.writeUInt16LE(0, 10);
     central.writeUInt16LE(DOS_DATE, 14);
     central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(data.length, 20);
