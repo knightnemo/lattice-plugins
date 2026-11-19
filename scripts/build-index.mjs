@@ -1,4 +1,5 @@
-// Builds the Pages site: index.json, blocked.json, the theme files and the schema.
+// Builds the Pages site: index.json, blocked.json, the theme files, the plugin zips the
+// registry packed from each entry's tagged source, and the schema.
 // Signing happens in a separate job that alone can read the key (see publish.yml).
 import { copyFileSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -10,8 +11,10 @@ import {
   fetchThemeFile,
   listThemeDirs,
   makeThemeValidator,
+  listEntryDirs,
   readJson,
 } from "./lib.mjs";
+import { checkPlugin, checkPluginEntryShape, fetchPluginFiles, indexPlugin } from "./plugins.mjs";
 
 const outIndex = process.argv.indexOf("--out");
 const out = path.resolve(outIndex === -1 ? "site" : process.argv[outIndex + 1]);
@@ -75,12 +78,30 @@ for (const id of ids) {
   });
 }
 
+const pluginDirs = listEntryDirs("plugins");
+if (pluginDirs.stray.length) throw new Error(`unexpected files under plugins/: ${pluginDirs.stray.join(", ")}`);
+const plugins = [];
+for (const id of pluginDirs.ids) {
+  const entry = readJson(path.join(ROOT, "plugins", id, "entry.json"));
+  const errors = checkPluginEntryShape(entry, id);
+  const fetched = errors.length ? { errors: [] } : fetchPluginFiles(entry);
+  errors.push(...fetched.errors);
+  const checked = fetched.files ? checkPlugin(fetched.files, entry) : { errors: [] };
+  errors.push(...checked.errors);
+  if (errors.length) throw new Error(`plugins/${id}/entry.json is invalid:\n  ${errors.join("\n  ")}`);
+
+  const file = `plugins/${id}/${entry.version}.zip`;
+  mkdirSync(path.dirname(path.join(out, file)), { recursive: true });
+  writeFileSync(path.join(out, file), checked.zip);
+  plugins.push(indexPlugin(entry, checked.manifest, checked.zip, fetched.updated, `${baseUrl}/${file}`));
+}
+
 const blockedList = readJson(path.join(ROOT, "blocked.json"));
 const blockedErrors = checkBlocked(blockedList);
 if (blockedErrors.length) throw new Error(`blocked.json is invalid:\n  ${blockedErrors.join("\n  ")}`);
 
 const write = (file, value) => writeFileSync(path.join(out, file), `${JSON.stringify(value, null, 2)}\n`);
-write("index.json", { format: 1, serial, generated, themes, plugins: [] });
+write("index.json", { format: 1, serial, generated, themes, plugins });
 write("blocked.json", { format: 1, serial, generated, blocked: blockedList });
 
 mkdirSync(path.join(out, "schema"));
@@ -88,4 +109,4 @@ for (const name of readdirSync(path.join(ROOT, "schema"))) copyFileSync(path.joi
 mkdirSync(path.join(out, "keys"));
 for (const name of readdirSync(path.join(ROOT, "keys"))) copyFileSync(path.join(ROOT, "keys", name), path.join(out, "keys", name));
 
-console.log(`Built index serial ${serial} with ${themes.length} theme(s) at ${generated}`);
+console.log(`Built index serial ${serial} with ${themes.length} theme(s) and ${plugins.length} plugin(s) at ${generated}`);

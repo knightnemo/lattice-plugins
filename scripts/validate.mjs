@@ -12,8 +12,10 @@ import {
   fetchThemeFile,
   listThemeDirs,
   makeThemeValidator,
+  listEntryDirs,
   readJson,
 } from "./lib.mjs";
+import { checkPlugin, checkPluginEntryShape, fetchPluginFiles, indexPermissions, permissionGrowth } from "./plugins.mjs";
 
 const baseIndex = process.argv.indexOf("--base");
 const baseRef = baseIndex === -1 ? "" : process.argv[baseIndex + 1] ?? "";
@@ -65,6 +67,59 @@ for (const id of ids) {
       }
       if (previous.repository !== entry.repository) notes.push("repository changed: needs a human review");
       else notes.push("update: may merge after green CI and the 24-hour cooling period");
+    }
+  }
+  if (errors.length) failed = true;
+  report.push(`${errors.length ? "FAIL" : "ok  "} ${file}`);
+  for (const error of errors) report.push(`     - ${error}`);
+  for (const note of notes) report.push(`     note: ${note}`);
+}
+
+const plugins = listEntryDirs("plugins");
+for (const file of plugins.stray) {
+  failed = true;
+  report.push(`FAIL ${file}: only plugins/<id>/entry.json belongs under plugins/`);
+}
+
+for (const id of plugins.ids) {
+  const file = `plugins/${id}/entry.json`;
+  const errors = [];
+  const notes = [];
+  let entry;
+  if (!existsSync(path.join(ROOT, file))) {
+    errors.push("missing entry.json");
+  } else {
+    try {
+      entry = readJson(path.join(ROOT, file));
+    } catch (error) {
+      errors.push(`entry.json is not valid JSON: ${error.message}`);
+    }
+  }
+  if (entry) errors.push(...checkPluginEntryShape(entry, id));
+  if (entry && !errors.length) {
+    const fetched = fetchPluginFiles(entry);
+    errors.push(...fetched.errors);
+    const checked = fetched.files ? checkPlugin(fetched.files, entry) : { errors: [] };
+    errors.push(...checked.errors);
+    const previous = readAtBase(file);
+    if (checked.manifest && !checked.errors.length) {
+      const permissions = indexPermissions(checked.manifest);
+      notes.push(`asks for: ${JSON.stringify(permissions)}`);
+      if (baseRef && !previous) {
+        notes.push("new plugin: needs a human review per REVIEW.md (first submission)");
+      } else if (previous && (previous.commit !== entry.commit || previous.sha256 !== entry.sha256 || previous.version !== entry.version)) {
+        if (compareVersions(entry.version, previous.version) <= 0) {
+          errors.push(`version ${entry.version} must be greater than the published ${previous.version}`);
+        }
+        const before = fetchPluginFiles(previous);
+        const old = before.files ? checkPlugin(before.files, previous) : { errors: before.errors };
+        const grown = old.manifest ? permissionGrowth(indexPermissions(old.manifest), permissions) : ["the published version could not be read"];
+        for (const line of grown) notes.push(line);
+        if (previous.repository !== entry.repository) notes.push("repository changed: needs a human review");
+        else if (old.manifest && old.manifest.runtime !== checked.manifest.runtime) notes.push("runtime changed: needs a human review");
+        else if (grown.length) notes.push("permissions grew: needs a human review");
+        else notes.push("update: may merge after green CI and the 24-hour cooling period");
+      }
     }
   }
   if (errors.length) failed = true;

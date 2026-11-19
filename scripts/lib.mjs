@@ -9,11 +9,11 @@ export const ROOT = path.resolve(import.meta.dirname, "..");
 export const MAX_THEME_BYTES = 256 * 1024;
 
 const ENTRY_KEYS = ["id", "version", "repository", "tag", "commit", "path", "sha256"];
-const ID_PATTERN = /^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$/;
-const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$/;
-const REPOSITORY_PATTERN = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
+export const ID_PATTERN = /^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+$/;
+export const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$/;
+export const REPOSITORY_PATTERN = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 // Tags go into a git refspec, so anything git or the shell could read as syntax is refused.
-const TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._\/-]{0,127}$/;
+export const TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._\/-]{0,127}$/;
 const PATH_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._\/-]*\.lattice-theme\.json$/;
 const BLOCK_ACTIONS = new Set(["disable", "warn"]);
 
@@ -21,15 +21,18 @@ export const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 
 export const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
 
-export function listThemeDirs() {
-  const dir = path.join(ROOT, "themes");
+// The entry folders under themes/ or plugins/, and any stray file beside them.
+export function listEntryDirs(kind) {
+  const dir = path.join(ROOT, kind);
   if (!existsSync(dir)) return { ids: [], stray: [] };
   const all = readdirSync(dir, { withFileTypes: true });
   return {
     ids: all.filter((d) => d.isDirectory()).map((d) => d.name).sort(),
-    stray: all.filter((d) => !d.isDirectory() && d.name !== ".gitkeep").map((d) => `themes/${d.name}`),
+    stray: all.filter((d) => !d.isDirectory() && d.name !== ".gitkeep").map((d) => `${kind}/${d.name}`),
   };
 }
+
+export const listThemeDirs = () => listEntryDirs("themes");
 
 export function checkEntryShape(entry, dirId) {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return ["entry.json must be a JSON object"];
@@ -55,13 +58,15 @@ export function checkEntryShape(entry, dirId) {
   return errors;
 }
 
-// Fetches only the tagged commit and reads the file out of git's object store, so what is
-// checked is exactly the blob at that commit, never a working tree or a release asset.
-export function fetchThemeFile(entry) {
+// Fetches only the entry's tag into a scratch repository, checks it points at the pinned
+// commit, and hands `read` a git runner there; whatever `read` returns comes back. Content
+// is read out of git's object store, so what is checked is exactly that commit, never a
+// working tree or a release asset.
+export function withTaggedCommit(entry, maxBuffer, read) {
   const dir = mkdtempSync(path.join(tmpdir(), "lattice-entry-"));
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   const git = (args, encoding = "utf8") =>
-    execFileSync("git", args, { cwd: dir, env, encoding, maxBuffer: 4 * MAX_THEME_BYTES, stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", args, { cwd: dir, env, encoding, maxBuffer, stdio: ["ignore", "pipe", "pipe"] });
   try {
     git(["init", "--quiet"]);
     git(["remote", "add", "origin", entry.repository]);
@@ -74,6 +79,14 @@ export function fetchThemeFile(entry) {
     if (tagCommit !== entry.commit) {
       return { errors: [`tag "${entry.tag}" points at ${tagCommit}, but the entry pins ${entry.commit}`] };
     }
+    return read(git);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+export function fetchThemeFile(entry) {
+  return withTaggedCommit(entry, 4 * MAX_THEME_BYTES, (git) => {
     const listing = git(["ls-tree", "-l", entry.commit, "--", entry.path]).trim();
     if (!listing) return { errors: [`${entry.path} does not exist at ${entry.commit}`] };
     const [meta] = listing.split("\t");
@@ -85,9 +98,7 @@ export function fetchThemeFile(entry) {
       return { errors: [`${entry.path} is ${size} bytes; themes are at most ${MAX_THEME_BYTES} bytes (256 KiB)`] };
     }
     return { data: git(["cat-file", "blob", blob], "buffer"), errors: [] };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 export function makeThemeValidator() {

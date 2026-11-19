@@ -1,10 +1,10 @@
 # Lattice plugins and themes registry
 
-This repository is the registry behind Settings › Appearance › Themes (and, later,
-Settings › Plugins) in [Lattice](https://github.com/leo1oel/lattice). Authors add an
-entry by pull request. CI checks every entry against the exact commit it pins, and on
-every merge to `main` a workflow builds a signed `index.json` and publishes it, with the
-theme files and the kill switch, to GitHub Pages:
+This repository is the registry behind Settings › Appearance › Themes and Settings ›
+Plugins › Browse in [Lattice](https://github.com/leo1oel/lattice). Authors add an entry by
+pull request. CI checks every entry against the exact commit it pins, and on every merge
+to `main` a workflow builds a signed `index.json` and publishes it, with the theme files,
+the plugin zips and the kill switch, to GitHub Pages:
 
 | File | URL |
 |---|---|
@@ -16,9 +16,9 @@ theme files and the kill switch, to GitHub Pages:
 
 Lattice verifies both signatures against public keys compiled into the app
 ([`keys/primary.pub`](keys/primary.pub), with [`keys/backup.pub`](keys/backup.pub) held
-back for rotation) and checks each theme file's sha256 against the index before it
-installs it. A compromised CDN or GitHub account can't inject a theme without the
-signing key.
+back for rotation) and checks each theme file's and plugin zip's sha256 against the index
+before it installs it. A compromised CDN or GitHub account can't inject a theme or a
+plugin without the signing key.
 
 Themes are data only: one JSON file that gives colors to Lattice's design roles. They
 can't run code or bundle fonts, so installing one asks for no permission and works on
@@ -69,6 +69,57 @@ For each entry, [`scripts/validate.mjs`](scripts/validate.mjs):
   change of repository for a human;
 - validates `blocked.json`.
 
+## Submitting a plugin
+
+Plugins run Node code in Lattice's sandbox and reach only what their manifest asks for
+(Lattice's [`plugin-sdk/README.md`](https://github.com/leo1oel/lattice/blob/main/plugin-sdk/README.md)).
+The registry lists **node plugins only**; native (`exec`) plugins stay URL installs.
+
+1. Keep the plugin folder (`lattice-plugin.toml`, its `main`, a `README.md` and a
+   licence file) in a public GitHub repository. Pick a reverse-domain `id` you own;
+   `app.lattice.*` is reserved for the plugins in leo1oel/lattice. The README names every
+   `network` origin and `network-local` port with the reason, and says plainly if the
+   plugin sends project content off the machine.
+2. Tag the commit you want listed and push the tag.
+3. Pack the folder at that commit with Lattice's
+   `node plugin-sdk/scripts/pack-plugin.mjs <folder> out.zip`, which prints its sha256.
+   The pack is reproducible: it leaves out tests and dot files and gives the same bytes on
+   any machine.
+4. Add `plugins/<id>/entry.json` here in a pull request:
+
+   ```json
+   {
+     "id": "app.lattice.zotero-search",
+     "version": "0.1.0",
+     "repository": "https://github.com/leo1oel/lattice",
+     "tag": "plugins/zotero-search-v0.1.0",
+     "commit": "<the full 40-character sha the tag points at>",
+     "path": "examples/plugins/zotero-search",
+     "sha256": "<what pack-plugin.mjs printed>",
+     "author": "Lattice",
+     "categories": ["citations"]
+   }
+   ```
+
+   `path` is the plugin folder in the repository (`"."` for its root). `id` and `version`
+   must equal the manifest's own. The folder name must equal `id`.
+
+The registry never takes an author-built archive: CI packs the folder at the tagged commit
+with [`scripts/pack.mjs`](scripts/pack.mjs) (a copy of `pack-plugin.mjs`) and publishes
+that zip only when its sha256 equals the entry's, so what the reviewer read is byte for
+byte what Lattice installs. For each plugin entry, [`scripts/validate.mjs`](scripts/validate.mjs)
+also:
+
+- reads the folder out of git's object store, refusing symlinks and submodules, within
+  Lattice's unpack limits (10,000 files, 200 MiB, a 50 MiB zip);
+- checks the manifest as Lattice does (schema, id, version, API level, name, permissions
+  and commands) and the registry's stricter rules: runtime `node`, a description, a
+  licence from Lattice's accepted list, a README and a licence file;
+- rejects scripts with lines over 1000 characters (minified or generated code) or that
+  evaluate code at run time (`eval`, `new Function`, `vm`);
+- on an update, checks that `version` went up and prints what the new version asks for
+  beyond the published one, so the reviewer sees a permission diff without reading TOML.
+
 ## Review rules
 
 CI does the mechanical half. A maintainer (today, leo1oel) reviews:
@@ -78,9 +129,8 @@ CI does the mechanical half. A maintainer (today, leo1oel) reviews:
   whose permissions grow or whose runtime changes).
 
 Other updates merge after green CI and a 24-hour cooling period, during which any
-maintainer can hold them.
-
-The reviewer asks:
+maintainer can hold them. [`REVIEW.md`](REVIEW.md) is the full checklist. For themes, the
+reviewer asks:
 
 1. Is the id or name impersonating someone? No "Lattice" or "Overleaf" names without
    permission, no confusable ids.
@@ -90,14 +140,13 @@ The reviewer asks:
    that only works after heavy lifting will look wrong; reject it.
 4. Does it stay data? No fonts, no images in the theme file, nothing outside the schema.
 
-### Plugins (later)
+### Plugins
 
-Plugin entries (`plugins/<id>/entry.json`) arrive in a later phase. They will pin a
-release asset by sha256 and CI will reproduce it from the tagged source. Their review
-adds: do the permissions fit the stated purpose, with every network origin and local
-port named in the README; does the plugin send project content off the machine, and
-say so plainly if it does; is the source readable, with no fetching and running remote
-code; does it duplicate a built-in feature in a misleading way.
+The plugin review adds: do the permissions fit the stated purpose, with every network
+origin and local port named in the README; does the plugin send project content off the
+machine, and say so plainly if it does; is the source readable, with no fetching and
+running remote code; does it duplicate a built-in feature in a misleading way. A plugin
+update also needs a human when its permissions grow or its runtime changes.
 
 ## The kill switch
 
@@ -122,6 +171,8 @@ published with the index:
 - Lattice never deletes the files or the data folder. Removing an entry from `themes/`
   only stops new installs; existing installs keep working unless they are also blocked.
 - Folder (developer) installs are never touched by the block list.
+- For plugins, `disable` turns installed copies off and refuses new installs of those
+  versions; `warn` shows the reason on the plugin's card.
 
 To block something, open a pull request that adds an item to `blocked.json`. It is
 published on the next signed run like any other change.
@@ -155,7 +206,28 @@ published on the next signed run like any other change.
       ]
     }
   ],
-  "plugins": []
+  "plugins": [
+    {
+      "id": "app.lattice.zotero-search",
+      "name": "Zotero",
+      "version": "0.1.0",
+      "api": 1,
+      "runtime": "node",
+      "license": "MIT",
+      "author": "Lattice",
+      "description": "…",
+      "repository": "https://github.com/leo1oel/lattice/tree/plugins/zotero-search-v0.1.0/examples/plugins/zotero-search",
+      "commit": "…",
+      "categories": ["citations"],
+      "permissions": { "projectRead": ["bibliography"], "networkLocal": [23119], "network": [], "secrets": [] },
+      "commands": [{ "id": "search", "title": "Search Zotero…", "description": "…" }],
+      "url": "https://leo1oel.github.io/lattice-plugins/plugins/app.lattice.zotero-search/0.1.0.zip",
+      "sha256": "…",
+      "size": 7386,
+      "downloads": null,
+      "updated": "2026-11-19T04:02:25.000Z"
+    }
+  ]
 }
 ```
 
@@ -165,6 +237,9 @@ published on the next signed run like any other change.
 - `variants[].colors` is each variant's base colors as the theme gives them, for preview
   swatches. Roles a theme leaves out are absent; the app fills them from its own palette.
 - `url` serves the exact bytes the `sha256` covers.
+- A plugin's `permissions` and `commands` are its manifest's, permissions in the order
+  Lattice compares them in; Lattice installs the zip only when the manifest inside asks for
+  exactly those. `updated` is the pinned commit's date; `downloads` is not counted yet.
 
 `blocked.json` is `{ "format": 1, "serial", "generated", "blocked": [ … ] }` with the
 same serial as the index it was published with.
@@ -192,12 +267,14 @@ release that trusts the new backup before retiring the old primary.
 
 ```
 themes/<id>/entry.json      one entry per theme
+plugins/<id>/entry.json     one entry per plugin
+REVIEW.md                   the reviewer's checklist
 blocked.json                kill switch
 schema/theme-1.json         theme JSON Schema (copied from leo1oel/lattice)
 keys/primary.pub            public key that signs the index
 keys/backup.pub             rotation key
 examples/                   themes hosted here to seed the registry
-scripts/                    validate and build-index
+scripts/                    validate, build-index, and pack (the reproducible plugin zip)
 .github/workflows/          validate on PR; build, sign and publish on main
 ```
 
